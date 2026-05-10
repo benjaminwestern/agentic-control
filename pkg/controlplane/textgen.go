@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/benjaminwestern/agentic-control/pkg/contract"
 )
 
 type CommitMessageInput struct {
@@ -68,11 +70,12 @@ type GenerateTextInput struct {
 }
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role       string                 `json:"role"`
+	Content    any                    `json:"content,omitempty"`
+	Parts      []contract.ContentPart `json:"parts,omitempty"`
+	ToolCalls  []ToolCall             `json:"tool_calls,omitempty"`
+	ToolCallID string                 `json:"tool_call_id,omitempty"`
+	Name       string                 `json:"name,omitempty"`
 }
 
 type ToolDefinition struct {
@@ -259,8 +262,15 @@ func (r *TextGenerationRouter) GenerateText(ctx context.Context, providerName st
 	if out.ProviderResult.Model == "" {
 		out.ProviderResult.Model = input.ModelSelection.Model
 	}
+	elapsed := time.Since(started)
 	if out.ProviderResult.LatencyMillis == 0 {
-		out.ProviderResult.LatencyMillis = time.Since(started).Milliseconds()
+		out.ProviderResult.LatencyMillis = elapsed.Milliseconds()
+	}
+	if out.ProviderResult.LatencyNanos == 0 {
+		out.ProviderResult.LatencyNanos = elapsed.Nanoseconds()
+	}
+	if out.ProviderResult.RequestCount == 0 {
+		out.ProviderResult.RequestCount = 1
 	}
 	out.Metadata = mergeProviderMetadata(out.Metadata, out.ProviderResult)
 	return out, nil

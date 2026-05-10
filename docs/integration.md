@@ -90,6 +90,32 @@ global config tree. That makes `agent_harness uninstall` safe because it can
 remove only the Agentic Control content for that runtime without guessing about
 shared global state.
 
+## Provider offload APIs
+
+Host applications that only need one-shot text generation or embeddings can use
+`pkg/controlplane/builtin.NewOneShot()` or
+`pkg/providers/openaicompatible.NewService()` without owning provider HTTP
+details.
+
+Use `openaicompatible.ResolveEndpointConfig`,
+`ResolveTextGenerationSelection`, or `ResolveEmbeddingSelection` when building
+OpenAI-compatible or Ollama selections from user configuration. The resolver
+normalises `ollama`, `openai`, and `openai-compatible`, applies provider
+defaults, honours `OLLAMA_HOST`, `OPENAI_COMPATIBLE_BASE_URL`, and
+`OPENAI_API_KEY`, and returns `/v1`-normalised endpoint options.
+
+`controlplane.Message.Parts` accepts first-class `contract.ContentPart` values,
+so callers can send text and image inputs through the public control-plane API
+without importing OpenAI-compatible HTTP content structs.
+
+One-shot text and embedding calls return `ProviderResultMetadata` with provider,
+model, base URL, request ID, request count, status code, nanosecond latency,
+finish reason, output kind, usage, and provider error details when available.
+Provider failures that still have useful metadata, such as an empty final
+content response from a local model, are returned as
+`*controlplane.ProviderResultError` so callers can inspect the same structured
+provider result that would have appeared beside a successful output.
+
 ## Separate debug from product
 
 Use two lanes:

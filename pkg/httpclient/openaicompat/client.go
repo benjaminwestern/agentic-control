@@ -45,6 +45,11 @@ type ClientOptions struct {
 	RetryPolicy       RetryPolicy
 }
 
+type ResponseMetadata struct {
+	StatusCode int
+	RequestID  string
+}
+
 // NewClient creates a new Client.
 func NewClient(baseURL, apiKeyEnv string) *Client {
 	return NewClientWithOptions(baseURL, apiKeyEnv, ClientOptions{})
@@ -171,14 +176,20 @@ func (c *Client) getBearerToken(ctx context.Context) (string, error) {
 
 // CreateChatCompletion sends a chat completion request to the server.
 func (c *Client) CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error) {
+	resp, _, err := c.CreateChatCompletionWithMetadata(ctx, req)
+	return resp, err
+}
+
+func (c *Client) CreateChatCompletionWithMetadata(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, ResponseMetadata, error) {
 	var resp ChatCompletionResponse
-	if err := c.postJSON(ctx, "/chat/completions", req, &resp); err != nil {
-		return nil, err
+	metadata, err := c.postJSONWithMetadata(ctx, "/chat/completions", req, &resp)
+	if err != nil {
+		return nil, metadata, err
 	}
 	if resp.Error != nil && resp.Error.Message != "" {
-		return nil, &APIError{Kind: ErrorKindAPI, Operation: "chat.completions", Message: resp.Error.Message, Type: resp.Error.Type, Param: resp.Error.Param, Code: resp.Error.Code}
+		return &resp, metadata, &APIError{Kind: ErrorKindAPI, Operation: "chat.completions", StatusCode: metadata.StatusCode, Message: resp.Error.Message, Type: resp.Error.Type, Param: resp.Error.Param, Code: resp.Error.Code}
 	}
-	return &resp, nil
+	return &resp, metadata, nil
 }
 
 // StreamChatCompletion sends a streaming chat completion request and yields responses.
@@ -267,14 +278,20 @@ func (c *Client) StreamChatCompletion(ctx context.Context, req ChatCompletionReq
 
 // CreateEmbeddings sends an embeddings request to the server.
 func (c *Client) CreateEmbeddings(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, error) {
+	resp, _, err := c.CreateEmbeddingsWithMetadata(ctx, req)
+	return resp, err
+}
+
+func (c *Client) CreateEmbeddingsWithMetadata(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, ResponseMetadata, error) {
 	var resp EmbeddingResponse
-	if err := c.postJSON(ctx, "/embeddings", req, &resp); err != nil {
-		return nil, err
+	metadata, err := c.postJSONWithMetadata(ctx, "/embeddings", req, &resp)
+	if err != nil {
+		return nil, metadata, err
 	}
 	if resp.Error != nil && resp.Error.Message != "" {
-		return nil, &APIError{Kind: ErrorKindAPI, Operation: "embeddings", Message: resp.Error.Message, Type: resp.Error.Type, Param: resp.Error.Param, Code: resp.Error.Code}
+		return &resp, metadata, &APIError{Kind: ErrorKindAPI, Operation: "embeddings", StatusCode: metadata.StatusCode, Message: resp.Error.Message, Type: resp.Error.Type, Param: resp.Error.Param, Code: resp.Error.Code}
 	}
-	return &resp, nil
+	return &resp, metadata, nil
 }
 
 // ListModels sends a GET request to the /v1/models endpoint.
@@ -292,23 +309,28 @@ func (c *Client) ListModels(ctx context.Context) (*ModelListResponse, error) {
 	return &listResp, nil
 }
 
-func (c *Client) postJSON(ctx context.Context, path string, payload any, responseTarget any) error {
+func (c *Client) postJSONWithMetadata(ctx context.Context, path string, payload any, responseTarget any) (ResponseMetadata, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+		return ResponseMetadata{}, fmt.Errorf("failed to marshal payload: %w", err)
 	}
-	body, err := c.doJSON(ctx, http.MethodPost, path, data)
+	body, metadata, err := c.doJSONWithMetadata(ctx, http.MethodPost, path, data)
 	if err != nil {
-		return err
+		return metadata, err
 	}
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(responseTarget); err != nil {
-		return &APIError{Kind: ErrorKindDecode, Operation: strings.Trim(path, "/"), Cause: err}
+		return metadata, &APIError{Kind: ErrorKindDecode, Operation: strings.Trim(path, "/"), StatusCode: metadata.StatusCode, Cause: err}
 	}
 
-	return nil
+	return metadata, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, path string, data []byte) ([]byte, error) {
+	body, _, err := c.doJSONWithMetadata(ctx, method, path, data)
+	return body, err
+}
+
+func (c *Client) doJSONWithMetadata(ctx context.Context, method string, path string, data []byte) ([]byte, ResponseMetadata, error) {
 	attempts := c.retryPolicy.MaxAttempts
 	if attempts <= 0 {
 		attempts = 1
@@ -317,10 +339,12 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, data []
 		attempts = 10
 	}
 	var lastErr error
+	var lastMetadata ResponseMetadata
 	for attempt := 1; attempt <= attempts; attempt++ {
-		body, retryable, err := c.doJSONOnce(ctx, method, path, data)
+		body, metadata, retryable, err := c.doJSONOnce(ctx, method, path, data)
+		lastMetadata = metadata
 		if err == nil {
-			return body, nil
+			return body, metadata, nil
 		}
 		lastErr = err
 		if !retryable || attempt == attempts {
@@ -334,21 +358,21 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, data []
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, lastMetadata, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return nil, lastErr
+	return nil, lastMetadata, lastErr
 }
 
-func (c *Client) doJSONOnce(ctx context.Context, method string, path string, data []byte) ([]byte, bool, error) {
+func (c *Client) doJSONOnce(ctx context.Context, method string, path string, data []byte) ([]byte, ResponseMetadata, bool, error) {
 	var body io.Reader
 	if data != nil {
 		body = bytes.NewReader(data)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return nil, false, &APIError{Kind: ErrorKindRequest, Method: method, URL: c.baseURL + path, Cause: err}
+		return nil, ResponseMetadata{}, false, &APIError{Kind: ErrorKindRequest, Method: method, URL: c.baseURL + path, Cause: err}
 	}
 
 	if data != nil {
@@ -356,7 +380,7 @@ func (c *Client) doJSONOnce(ctx context.Context, method string, path string, dat
 	}
 	token, err := c.getBearerToken(ctx)
 	if err != nil {
-		return nil, false, &APIError{Kind: ErrorKindAuth, Method: method, URL: c.baseURL + path, Cause: err}
+		return nil, ResponseMetadata{}, false, &APIError{Kind: ErrorKindAuth, Method: method, URL: c.baseURL + path, Cause: err}
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -365,16 +389,36 @@ func (c *Client) doJSONOnce(ctx context.Context, method string, path string, dat
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		apiErr := &APIError{Kind: ErrorKindTransport, Method: method, URL: c.baseURL + path, Cause: err, Retryable: true}
-		return nil, true, apiErr
+		return nil, ResponseMetadata{}, true, apiErr
 	}
 	defer func() { _ = resp.Body.Close() }()
+	metadata := responseMetadata(resp)
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
 		apiErr := apiErrorFromResponse(method, c.baseURL+path, resp.StatusCode, respBody)
-		return nil, apiErr.Retryable, apiErr
+		return nil, metadata, apiErr.Retryable, apiErr
 	}
-	return respBody, false, nil
+	return respBody, metadata, false, nil
+}
+
+func responseMetadata(resp *http.Response) ResponseMetadata {
+	if resp == nil {
+		return ResponseMetadata{}
+	}
+	return ResponseMetadata{
+		StatusCode: resp.StatusCode,
+		RequestID:  firstNonEmptyHeader(resp.Header, "x-request-id", "openai-request-id", "x-requestid", "request-id"),
+	}
+}
+
+func firstNonEmptyHeader(header http.Header, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func apiErrorFromResponse(method string, requestURL string, statusCode int, body []byte) *APIError {

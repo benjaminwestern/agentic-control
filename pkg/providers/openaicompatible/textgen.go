@@ -201,12 +201,14 @@ func applyChatModelOptions(req *openaicompat.ChatCompletionRequest, options api.
 }
 
 func endpointConfigFromSelection(selection api.TextGenerationModelSelection) EndpointConfig {
-	return EndpointConfig{
-		Provider:          selection.Provider,
-		BaseURL:           selection.Options.BaseURL,
-		APIKey:            selection.Options.APIKey,
-		OAuthTokenURL:     selection.Options.OAuthTokenURL,
-		OAuthClientID:     selection.Options.OAuthClientID,
-		OAuthClientSecret: selection.Options.OAuthClientSecret,
-	}
+	endpoint := ResolveEndpointConfig(EndpointResolutionInput{
+		Provider: selection.Provider,
+		Model:    selection.Model,
+		BaseURL:  selection.Options.BaseURL,
+		APIKey:   selection.Options.APIKey,
+	})
+	endpoint.OAuthTokenURL = selection.Options.OAuthTokenURL
+	endpoint.OAuthClientID = selection.Options.OAuthClientID
+	endpoint.OAuthClientSecret = selection.Options.OAuthClientSecret
+	return endpoint
 }

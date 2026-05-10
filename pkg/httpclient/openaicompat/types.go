@@ -2,15 +2,18 @@ package openaicompat
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // ChatMessage represents a single message in a chat conversation.
 type ChatMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"` // Can be string or []ChatContentPart
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role             string     `json:"role"`
+	Content          any        `json:"content"` // Can be string or []ChatContentPart
+	Reasoning        string     `json:"reasoning,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	Name             string     `json:"name,omitempty"`
 }
 
 // ToolCall represents a tool call requested by the model.
@@ -177,6 +180,46 @@ func MessageContentText(content any) string {
 		var result string
 		for _, part := range v {
 			if part.Type == "text" {
+				result += part.Text
+			}
+		}
+		return result
+	}
+	return ""
+}
+
+func MessageContentReasoning(message ChatMessage) string {
+	if strings.TrimSpace(message.ReasoningContent) != "" {
+		return message.ReasoningContent
+	}
+	if strings.TrimSpace(message.Reasoning) != "" {
+		return message.Reasoning
+	}
+	return contentPartText(message.Content, "reasoning")
+}
+
+func contentPartText(content any, partType string) string {
+	if content == nil {
+		return ""
+	}
+	switch v := content.(type) {
+	case []interface{}:
+		var b []byte
+		b, _ = json.Marshal(v)
+		var parts []ChatContentPart
+		if err := json.Unmarshal(b, &parts); err == nil {
+			var result string
+			for _, part := range parts {
+				if part.Type == partType {
+					result += part.Text
+				}
+			}
+			return result
+		}
+	case []ChatContentPart:
+		var result string
+		for _, part := range v {
+			if part.Type == partType {
 				result += part.Text
 			}
 		}

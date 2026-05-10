@@ -509,14 +509,16 @@ func (p *Provider) GenerateEmbeddings(ctx context.Context, input api.EmbeddingIn
 }
 
 func endpointConfigFromEmbeddingSelection(selection api.EmbeddingModelSelection) EndpointConfig {
-	return EndpointConfig{
-		Provider:          selection.Provider,
-		BaseURL:           selection.Options.BaseURL,
-		APIKey:            selection.Options.APIKey,
-		OAuthTokenURL:     selection.Options.OAuthTokenURL,
-		OAuthClientID:     selection.Options.OAuthClientID,
-		OAuthClientSecret: selection.Options.OAuthClientSecret,
-	}
+	endpoint := ResolveEndpointConfig(EndpointResolutionInput{
+		Provider: selection.Provider,
+		Model:    selection.Model,
+		BaseURL:  selection.Options.BaseURL,
+		APIKey:   selection.Options.APIKey,
+	})
+	endpoint.OAuthTokenURL = selection.Options.OAuthTokenURL
+	endpoint.OAuthClientID = selection.Options.OAuthClientID
+	endpoint.OAuthClientSecret = selection.Options.OAuthClientSecret
+	return endpoint
 }
 
 func (p *Provider) ListSessions(ctx context.Context) ([]contract.RuntimeSession, error) {

@@ -139,8 +139,15 @@ func (r *EmbeddingRouter) GenerateEmbeddings(ctx context.Context, providerName s
 	if out.ProviderResult.Model == "" {
 		out.ProviderResult.Model = input.ModelSelection.Model
 	}
+	elapsed := time.Since(started)
 	if out.ProviderResult.LatencyMillis == 0 {
-		out.ProviderResult.LatencyMillis = time.Since(started).Milliseconds()
+		out.ProviderResult.LatencyMillis = elapsed.Milliseconds()
+	}
+	if out.ProviderResult.LatencyNanos == 0 {
+		out.ProviderResult.LatencyNanos = elapsed.Nanoseconds()
+	}
+	if out.ProviderResult.RequestCount == 0 {
+		out.ProviderResult.RequestCount = 1
 	}
 	if out.ProviderResult.Usage.VectorCount == 0 {
 		out.ProviderResult.Usage.VectorCount = len(out.Vectors)
