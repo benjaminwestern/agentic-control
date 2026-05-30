@@ -281,7 +281,7 @@ func jsonArguments(raw string) any {
 
 func sigmaOptionsFromGenerateTextInput(provider sigma.ProviderID, input api.GenerateTextInput) []sigma.Option {
 	modelOptions := input.ModelSelection.Options
-	options := make([]sigma.Option, 0, 6)
+	options := make([]sigma.Option, 0, 8)
 	if modelOptions.MaxOutputTokens > 0 {
 		options = append(options, sigma.WithMaxTokens(modelOptions.MaxOutputTokens))
 	}
@@ -301,6 +301,28 @@ func sigmaOptionsFromGenerateTextInput(provider sigma.ProviderID, input api.Gene
 		options = append(options, sigma.WithMetadata(input.Metadata))
 	}
 
+	var openAIOptions sigma.OpenAIOptions
+	hasOpenAIOptions := false
+	if strings.TrimSpace(modelOptions.ReasoningEffort) != "" {
+		openAIOptions.ReasoningEffort = sigma.ThinkingLevel(modelOptions.ReasoningEffort)
+		hasOpenAIOptions = true
+	}
+	if modelOptions.TopLogprobs > 0 {
+		openAIOptions.TopLogprobs = modelOptions.TopLogprobs
+		hasOpenAIOptions = true
+	}
+	if input.ToolChoice != nil {
+		openAIOptions.ToolChoice = input.ToolChoice
+		hasOpenAIOptions = true
+	}
+	if responseFormat := sigmaResponseFormat(input); responseFormat != nil {
+		openAIOptions.ResponseFormat = responseFormat
+		hasOpenAIOptions = true
+	}
+	if hasOpenAIOptions {
+		options = append(options, sigma.WithOpenAIOptions(openAIOptions))
+	}
+
 	extraBody := map[string]any{}
 	if modelOptions.TopP != nil {
 		extraBody["top_p"] = *modelOptions.TopP
@@ -308,17 +330,8 @@ func sigmaOptionsFromGenerateTextInput(provider sigma.ProviderID, input api.Gene
 	if strings.TrimSpace(modelOptions.ReasoningEffort) != "" {
 		extraBody["reasoning_effort"] = modelOptions.ReasoningEffort
 	}
-	if modelOptions.Logprobs {
+	if modelOptions.Logprobs && modelOptions.TopLogprobs <= 0 {
 		extraBody["logprobs"] = true
-		if modelOptions.TopLogprobs > 0 {
-			extraBody["top_logprobs"] = modelOptions.TopLogprobs
-		}
-	}
-	if input.ToolChoice != nil {
-		extraBody["tool_choice"] = input.ToolChoice
-	}
-	if responseFormat := sigmaResponseFormat(input); responseFormat != nil {
-		extraBody["response_format"] = responseFormat
 	}
 
 	providerOptions := map[string]any{"include_usage": true}

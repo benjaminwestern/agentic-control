@@ -38,15 +38,7 @@ func (c controlPlaneSigmaCompleter) CompleteTarget(ctx context.Context, request 
 		return result, fmt.Errorf("%s", result.Error)
 	}
 
-	sigmaOptions := appliedSigmaOptions(request.Options)
-	modelOptions := modelOptionsFromSigmaOptions(sigmaOptions)
-	if schema := responseSchemaFromSigmaOptions(sigmaOptions); schema != nil {
-		modelOptions.ResponseSchema = schema
-	}
-	if logprobs, topLogprobs := logprobRequestFromSigmaOptions(sigmaOptions); logprobs {
-		modelOptions.Logprobs = true
-		modelOptions.TopLogprobs = topLogprobs
-	}
+	modelOptions := modelOptionsFromSigmaOptions(appliedSigmaOptions(request.Options))
 
 	fanout, err := RunFanout(ctx, c.controller, FanoutOptions{
 		Prompt: prompt,
@@ -195,72 +187,49 @@ func modelOptionsFromSigmaOptions(options sigma.Options) api.ModelOptions {
 	if options.ThinkingBudgetTokens != nil {
 		out.ThinkingBudget = options.ThinkingBudgetTokens
 	}
+	if options.OpenAIOptions != nil {
+		if level := strings.TrimSpace(string(options.OpenAIOptions.ReasoningEffort)); level != "" && level != string(sigma.ThinkingLevelOff) {
+			out.ReasoningEffort = level
+		}
+		if schema := responseSchemaFromOpenAIResponseFormat(options.OpenAIOptions.ResponseFormat); schema != nil {
+			out.ResponseSchema = schema
+		}
+		if options.OpenAIOptions.TopLogprobs > 0 {
+			out.Logprobs = true
+			out.TopLogprobs = options.OpenAIOptions.TopLogprobs
+		}
+	}
 	return out
 }
 
-func responseSchemaFromSigmaOptions(options sigma.Options) map[string]any {
-	for _, providerOptions := range options.ProviderOptions {
-		extra, _ := providerOptions["extra_body"].(map[string]any)
-		if extra == nil {
-			continue
-		}
-		format, _ := extra["response_format"].(map[string]any)
-		if format == nil || format["type"] != "json_schema" {
-			continue
-		}
-		jsonSchema, _ := format["json_schema"].(map[string]any)
-		if jsonSchema == nil {
-			continue
-		}
-		if schema, ok := jsonSchema["schema"].(map[string]any); ok {
-			return schema
-		}
+func responseSchemaFromOpenAIResponseFormat(value any) map[string]any {
+	format := sigmaAnyMap(value)
+	if format == nil || format["type"] != "json_schema" {
+		return nil
 	}
-	return nil
+	jsonSchema := sigmaAnyMap(format["json_schema"])
+	if jsonSchema == nil {
+		return nil
+	}
+	return sigmaAnyMap(jsonSchema["schema"])
 }
 
-func logprobRequestFromSigmaOptions(options sigma.Options) (bool, int) {
-	for _, providerOptions := range options.ProviderOptions {
-		extra, _ := providerOptions["extra_body"].(map[string]any)
-		if extra == nil {
-			continue
-		}
-		if !boolValue(extra["logprobs"]) {
-			continue
-		}
-		top := intValue(extra["top_logprobs"])
-		if top <= 0 {
-			top = 5
-		}
-		return true, top
-	}
-	return false, 0
-}
-
-func boolValue(value any) bool {
+func sigmaAnyMap(value any) map[string]any {
 	switch typed := value.(type) {
-	case bool:
+	case nil:
+		return nil
+	case map[string]any:
 		return typed
-	case string:
-		return strings.EqualFold(strings.TrimSpace(typed), "true")
 	default:
-		return false
-	}
-}
-
-func intValue(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	case json.Number:
-		parsed, _ := typed.Int64()
-		return int(parsed)
-	default:
-		return 0
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return nil
+		}
+		var out map[string]any
+		if err := json.Unmarshal(encoded, &out); err != nil {
+			return nil
+		}
+		return out
 	}
 }
 
