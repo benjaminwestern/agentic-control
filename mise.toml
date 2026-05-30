@@ -1,6 +1,6 @@
 [tools]
 "go:oss.terrastruct.com/d2" = { version = "0.7.1" }
-go = "1.26.1"
+go = "1.26.3"
 hk = "latest"
 node = "22"
 python = "3.13"

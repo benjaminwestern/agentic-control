@@ -7,7 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/benjaminwestern/agentic-control/internal/idgen"
+	sigmaevals "github.com/benjaminwestern/sigma-evals"
 )
 
 type BatchEvaluationOptions struct {
@@ -27,67 +28,36 @@ func parseEvalTarget(raw string) FanoutTarget {
 }
 
 func RunBatchEvaluation(ctx context.Context, controller FanoutController, opts BatchEvaluationOptions) ([]EvaluationResultRecord, error) {
-	targetFanout := parseEvalTarget(opts.TargetModel)
-	judgeFanout := parseEvalTarget(opts.JudgeModel)
+	evaluator := sigmaevals.NewTargetEvaluator(controlPlaneSigmaCompleter{controller: controller})
+	target := sigmaEvalTargetFromEvalTarget(opts.TargetModel)
+	judge := sigmaEvalTargetFromEvalTarget(opts.JudgeModel)
+	mode := sigmaEvalMode(opts.Mode)
 
 	var results []EvaluationResultRecord
-
 	for _, item := range opts.Items {
 		start := time.Now()
-
-		targetOpts := FanoutOptions{
-			Prompt:      fmt.Sprintf("%s\n\nInput:\n%s", opts.Prompt, item.InputPayload),
-			Targets:     []FanoutTarget{targetFanout},
-			EventBuffer: 1024,
-		}
-
-		resFanout, err := RunFanout(ctx, controller, targetOpts)
+		judgeResult, err := evaluator.Evaluate(ctx, sigmaevals.EvaluateInput{
+			Input:        item.InputPayload,
+			GroundTruth:  item.TargetOutput,
+			Rubric:       rubricPrompt(opts.Prompt),
+			TargetPrompt: opts.Prompt,
+			Target:       target,
+			Judge:        judge,
+			Mode:         mode,
+		})
 		if err != nil {
-			return results, fmt.Errorf("run fanout for item %s: %w", item.ID, err)
-		}
-		if len(resFanout.Targets) == 0 || resFanout.Targets[0].Error != "" {
-			return results, fmt.Errorf("target generation failed for item %s: %s", item.ID, resFanout.Targets[0].Error)
+			return results, fmt.Errorf("evaluate item %s: %w", item.ID, err)
 		}
 
-		targetOutput := resFanout.Targets[0].Text
-
-		evalPrompt := FormatInlineEvalPrompt(GetRubric(opts.Prompt), item.InputPayload, targetOutput, item.TargetOutput)
-
-		fanoutRes := FanoutResult{
-			Prompt: evalPrompt,
-			Targets: []FanoutTargetResult{
-				{
-					Target: FanoutTarget{Label: "target_output"},
-					Text:   targetOutput,
-				},
-			},
-		}
-
-		reduceRes, err := RunReduction(ctx, controller, ReductionModeEvaluate, fanoutRes, judgeFanout, false)
-		if err != nil {
-			return results, fmt.Errorf("run reduction for item %s: %w", item.ID, err)
-		}
-
-		var parsedScore struct {
-			Score     float64 `json:"score"`
-			Rationale string  `json:"rationale"`
-			Passed    bool    `json:"passed"`
-		}
-		if err := json.Unmarshal([]byte(reduceRes.JSON), &parsedScore); err != nil {
-			return results, fmt.Errorf("failed to parse judge output for item %s: %w", item.ID, err)
-		}
-
-		resultRec := EvaluationResultRecord{
-			ID:            uuid.New().String(),
+		results = append(results, EvaluationResultRecord{
+			ID:            idgen.NewUUID(),
 			DatasetItemID: item.ID,
-			Score:         parsedScore.Score,
-			Rationale:     parsedScore.Rationale,
-			Passed:        parsedScore.Passed,
+			Score:         judgeResult.Score,
+			Rationale:     judgeResult.Rationale,
+			Passed:        judgeResult.Passed,
 			LatencyMS:     int(time.Since(start).Milliseconds()),
-			CostUSD:       resFanout.TotalCostUSD + reduceRes.RecordedCostUSD,
-		}
-
-		results = append(results, resultRec)
+			CostUSD:       sigmaMessageCostUSD(judgeResult.TargetMessage, judgeResult.JudgeMessage),
+		})
 	}
 
 	return results, nil
@@ -108,70 +78,46 @@ type JudgeAlignmentMetrics struct {
 }
 
 func RunJudgeAlignmentEvaluation(ctx context.Context, controller FanoutController, opts JudgeAlignmentOptions) (JudgeAlignmentMetrics, error) {
-	judgeFanout := parseEvalTarget(opts.JudgeModel)
 	var metrics JudgeAlignmentMetrics
-
-	evalMode := opts.Mode
-	if evalMode == "" {
-		evalMode = ReductionModeEvaluate
-	}
-
-	var squaredErrorSum float64
-	var correctCount int
-
+	cases := make([]sigmaevals.JudgeAlignmentCase, 0, len(opts.Items))
 	for _, item := range opts.Items {
 		var humanScore struct {
 			Score  float64 `json:"score"`
 			Passed bool    `json:"passed"`
 		}
 		if err := json.Unmarshal([]byte(item.TargetOutput), &humanScore); err != nil {
-			// Skip if target output isn't a human score
 			continue
 		}
-
-		// The input payload contains the text to grade
-		evalPrompt := FormatInlineEvalPrompt(GetRubric(opts.Prompt), "", item.InputPayload, "")
-
-		fanoutRes := FanoutResult{
-			Prompt: evalPrompt,
-			Targets: []FanoutTargetResult{
-				{
-					Target: FanoutTarget{Label: "target_output"},
-					Text:   item.InputPayload,
-				},
-			},
-		}
-
-		reduceRes, err := RunReduction(ctx, controller, evalMode, fanoutRes, judgeFanout, false)
-		if err != nil {
-			return metrics, fmt.Errorf("run judge reduction for item %s: %w", item.ID, err)
-		}
-
-		metrics.CostUSD += reduceRes.RecordedCostUSD
-
-		var judgeScore struct {
-			Score  float64 `json:"score"`
-			Passed bool    `json:"passed"`
-		}
-		if err := json.Unmarshal([]byte(reduceRes.JSON), &judgeScore); err != nil {
-			continue
-		}
-
-		metrics.TotalEvaluated++
-
-		diff := judgeScore.Score - humanScore.Score
-		squaredErrorSum += diff * diff
-
-		if judgeScore.Passed == humanScore.Passed {
-			correctCount++
-		}
+		cases = append(cases, sigmaevals.JudgeAlignmentCase{
+			ID:             item.ID,
+			TargetOutput:   item.InputPayload,
+			Rubric:         rubricPrompt(opts.Prompt),
+			ExpectedScore:  humanScore.Score,
+			ExpectedPassed: humanScore.Passed,
+		})
+	}
+	if len(cases) == 0 {
+		return metrics, nil
 	}
 
-	if metrics.TotalEvaluated > 0 {
-		metrics.MeanSquaredError = squaredErrorSum / float64(metrics.TotalEvaluated)
-		metrics.Accuracy = float64(correctCount) / float64(metrics.TotalEvaluated)
+	result, err := sigmaevals.NewTargetEvaluator(controlPlaneSigmaCompleter{controller: controller}).EvaluateJudges(ctx, sigmaevals.JudgeAlignmentSpec{
+		Name:         "judge-alignment",
+		Cases:        cases,
+		JudgeTargets: []sigmaevals.Target{sigmaEvalTargetFromEvalTarget(opts.JudgeModel)},
+		Mode:         sigmaEvalMode(opts.Mode),
+	})
+	if err != nil {
+		return metrics, err
 	}
 
+	metrics.TotalEvaluated = result.Summary.Regression.Count
+	metrics.MeanSquaredError = result.Summary.Regression.MeanSquaredError
+	metrics.Accuracy = result.Summary.Classification.Accuracy
+	for _, item := range result.Results {
+		if item.Result != nil {
+			metrics.CostUSD += sigmaMessageCostUSD(item.Result.JudgeMessage)
+		}
+	}
 	return metrics, nil
 }
 
@@ -195,7 +141,7 @@ func RunDatasetEvaluation(ctx context.Context, ledger *SQLiteLedgerStore, contro
 	}
 
 	eval := EvaluationRecord{
-		ID:          uuid.New().String(),
+		ID:          idgen.NewUUID(),
 		Name:        opts.Name,
 		DatasetID:   opts.DatasetID,
 		PromptID:    opts.PromptID,

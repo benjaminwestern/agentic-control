@@ -2,6 +2,7 @@ package orchestration_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 type mockEvalFanoutController struct {
 	lastSessionID string
 	mockText      string
+	mockLogprobs  []contract.TokenLogprob
 }
 
 func (m *mockEvalFanoutController) Describe() contract.SystemDescriptor {
@@ -79,9 +81,14 @@ func (m *mockEvalFanoutController) SubscribeEvents(buffer int) (<-chan contract.
 				"delta": m.mockText,
 			},
 		}
+		payload := map[string]any{}
+		if len(m.mockLogprobs) > 0 {
+			payload["logprobs"] = m.mockLogprobs
+		}
 		ch <- contract.RuntimeEvent{
 			SessionID: m.lastSessionID,
 			EventType: contract.EventTurnCompleted,
+			Payload:   payload,
 		}
 	}()
 	return ch, func() {}
@@ -125,6 +132,44 @@ func TestRunBatchEvaluation(t *testing.T) {
 	}
 	if results[0].CostUSD != 0.02 { // 0.01 target + 0.01 judge
 		t.Errorf("Expected CostUSD 0.02, got %v", results[0].CostUSD)
+	}
+}
+
+func TestRunBatchEvaluationGEvalUsesJudgeLogprobs(t *testing.T) {
+	ctrl := &mockEvalFanoutController{
+		mockText: "4",
+		mockLogprobs: []contract.TokenLogprob{{
+			Token:   "4",
+			Logprob: -0.2,
+			TopLogprobs: []contract.TokenLogprob{
+				{Token: "4", Logprob: math.Log(0.25)},
+				{Token: "5", Logprob: math.Log(0.75)},
+			},
+		}},
+	}
+
+	results, err := orchestration.RunBatchEvaluation(context.Background(), ctrl, orchestration.BatchEvaluationOptions{
+		Items: []orchestration.DatasetItemRecord{{
+			ID:           "item-1",
+			InputPayload: "Hello",
+			TargetOutput: "World",
+		}},
+		Prompt:      "rubric-accuracy",
+		TargetModel: "openaicompatible=gpt-4o-mini",
+		JudgeModel:  "openaicompatible=gpt-4o",
+		Mode:        orchestration.ReductionModeGEval,
+	})
+	if err != nil {
+		t.Fatalf("RunBatchEvaluation g-eval failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	if math.Abs(results[0].Score-4.75) > 0.0001 {
+		t.Fatalf("score = %v, want 4.75", results[0].Score)
+	}
+	if !results[0].Passed {
+		t.Fatal("passed = false, want true")
 	}
 }
 

@@ -280,25 +280,20 @@ func TestDescribeProbesConfiguredEndpointModels(t *testing.T) {
 }
 
 func TestGenerateTextRoutesModelOptions(t *testing.T) {
-	seen := make(chan openaicompat.ChatCompletionRequest, 1)
+	seen := make(chan map[string]any, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		var req openaicompat.ChatCompletionRequest
+		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("failed to decode req: %v", err)
 		}
 		seen <- req
 
-		resp := openaicompat.ChatCompletionResponse{
-			ID:    "chatcmpl-test",
-			Model: req.Model,
-			Choices: []openaicompat.ChatCompletionChoice{{
-				Index:   0,
-				Message: openaicompat.ChatMessage{Role: "assistant", Content: `{"ok":true}`},
-			}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		model, _ := req["model"].(string)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"{\\\"ok\\\":true}\"}}]}\n\n", model)
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\n", model)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -332,11 +327,13 @@ func TestGenerateTextRoutesModelOptions(t *testing.T) {
 
 	select {
 	case req := <-seen:
-		if req.ReasoningEffort != "high" || !req.Logprobs || req.TopLogprobs != 3 {
+		if req["reasoning_effort"] != "high" || req["logprobs"] != true || req["top_logprobs"] != float64(3) {
 			t.Fatalf("model options not routed: %#v", req)
 		}
-		if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_schema" || req.ResponseFormat.JSONSchema == nil {
-			t.Fatalf("response format = %#v, want json_schema", req.ResponseFormat)
+		responseFormat, _ := req["response_format"].(map[string]any)
+		jsonSchema, _ := responseFormat["json_schema"].(map[string]any)
+		if responseFormat["type"] != "json_schema" || jsonSchema["schema"] == nil {
+			t.Fatalf("response format = %#v, want json_schema", responseFormat)
 		}
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for request")

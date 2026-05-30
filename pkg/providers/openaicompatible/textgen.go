@@ -166,7 +166,7 @@ func (p *Provider) GenerateThreadTitle(ctx context.Context, input api.ThreadTitl
 }
 
 func (p *Provider) GenerateText(ctx context.Context, input api.GenerateTextInput) (*api.GenerateTextOutput, error) {
-	return NewService(endpointConfigFromSelection(input.ModelSelection)).GenerateText(ctx, input)
+	return GenerateTextWithSigma(ctx, endpointConfigFromSelection(input.ModelSelection), input)
 }
 
 func openAIClientForOptions(options api.ModelOptions) *openaicompat.Client {

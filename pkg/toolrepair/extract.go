@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/benjaminwestern/agentic-control/internal/idgen"
 	"github.com/benjaminwestern/agentic-control/pkg/toolrepair/jsonrepair"
-	"github.com/google/uuid"
 )
 
 // ToolCall represents an extracted tool call.
@@ -577,5 +577,5 @@ func parseGemmaArgs(raw string) map[string]any {
 }
 
 func newToolCallID() string {
-	return "call_" + uuid.NewString()
+	return idgen.NewPrefixed("call_")
 }

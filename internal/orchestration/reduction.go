@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/benjaminwestern/agentic-control/pkg/contract"
 	api "github.com/benjaminwestern/agentic-control/pkg/controlplane"
+	sigmaevals "github.com/benjaminwestern/sigma-evals"
 )
 
 type ReductionMode string
@@ -194,27 +194,7 @@ func RunReduction(ctx context.Context, controller FanoutController, mode Reducti
 }
 
 func gEvalScoreFromLogprobs(logprobs []contract.TokenLogprob) (float64, bool) {
-	tokenScores := map[string]float64{"1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0, "5": 5.0}
-	for _, lp := range logprobs {
-		if len(lp.TopLogprobs) > 0 {
-			totalProb := 0.0
-			weightedSum := 0.0
-			for _, top := range lp.TopLogprobs {
-				if score, ok := tokenScores[strings.TrimSpace(top.Token)]; ok {
-					prob := math.Exp(top.Logprob)
-					totalProb += prob
-					weightedSum += prob * score
-				}
-			}
-			if totalProb > 0 {
-				return weightedSum / totalProb, true
-			}
-		}
-		if score, ok := tokenScores[strings.TrimSpace(lp.Token)]; ok {
-			return score, true
-		}
-	}
-	return 0, false
+	return sigmaevals.GEvalScore(sigmaEvalTokenLogprobs(logprobs))
 }
 
 func resolveReductionTarget(descriptors []contract.RuntimeDescriptor, requested FanoutTarget) (FanoutTarget, error) {
@@ -309,10 +289,16 @@ func parseReductionResult(mode ReductionMode, candidate string) (string, string,
 		}
 		return renderBestOfNResult(raw), normaliseJSON(raw), nil
 	case ReductionModeEvaluate:
-		if strings.TrimSpace(stringValue(raw["rationale"])) == "" || raw["score"] == nil || raw["passed"] == nil {
-			return "", "", fmt.Errorf("missing rationale, score or passed")
+		parsed, err := sigmaevals.ParseJSONJudgeResult(candidate)
+		if err != nil {
+			return "", "", err
 		}
-		return renderEvaluateResult(raw), normaliseJSON(raw), nil
+		values := map[string]any{
+			"score":     parsed.Score,
+			"rationale": parsed.Rationale,
+			"passed":    parsed.Passed,
+		}
+		return renderEvaluateResult(values), parsed.JSON, nil
 	default:
 		return "", "", fmt.Errorf("unknown reduction mode")
 	}

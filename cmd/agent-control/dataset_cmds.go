@@ -116,6 +116,7 @@ func newDatasetEvalCmd() *cobra.Command {
 	runCmd.Flags().StringVar(&judgeModel, "judge-model", "openaicompatible=gpt-4o", "Judge model")
 	runCmd.Flags().StringVar(&name, "name", "CLI Evaluation", "Name of the evaluation")
 	runCmd.Flags().StringVar(&socketPath, "socket-path", "", "Optional daemon socket path")
+	runCmd.Flags().StringVar(&mode, "mode", "evaluate", "Evaluation mode: 'evaluate' or 'g_eval'")
 
 	var inputPayload string
 	var groundTruth string
@@ -149,6 +150,7 @@ func newDatasetEvalCmd() *cobra.Command {
 				Prompt:      prompt,
 				TargetModel: targetModel,
 				JudgeModel:  judgeModel,
+				Mode:        orchestration.ReductionMode(mode),
 			})
 			if err != nil {
 				return err
@@ -170,7 +172,9 @@ func newDatasetEvalCmd() *cobra.Command {
 	inlineCmd.Flags().StringVar(&targetModel, "target-model", "openaicompatible=gpt-4o-mini", "Target model")
 	inlineCmd.Flags().StringVar(&judgeModel, "judge-model", "openaicompatible=gpt-4o", "Judge model")
 	inlineCmd.Flags().StringVar(&socketPath, "socket-path", "", "Optional daemon socket path")
+	inlineCmd.Flags().StringVar(&mode, "mode", "evaluate", "Evaluation mode: 'evaluate' or 'g_eval'")
 
+	cmd.AddCommand(judgeCmd)
 	cmd.AddCommand(runCmd)
 	cmd.AddCommand(inlineCmd)
 	return cmd
