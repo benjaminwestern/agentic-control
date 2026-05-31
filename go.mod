@@ -4,11 +4,11 @@ go 1.26.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/benjaminwestern/sigma-evals v0.1.1
+	github.com/benjaminwestern/sigma-evals v0.2.0
 	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/spf13/cobra v1.8.1
-	github.com/wintermi/sigma v0.1.1-0.20260530115833-1426fccffb18
+	github.com/wintermi/sigma v0.2.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
